@@ -30,7 +30,8 @@ async def is_duplicate(url: str) -> bool:
     try:
         res = supabase.table("ai_money_cases").select("url").eq("url", url).execute()
         return len(res.data) > 0
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Supabase error: {e}")
         return False
 
 async def fetch_hacker_news(client_http: httpx.AsyncClient):
@@ -132,8 +133,10 @@ async def fetch_rss():
     return found
 
 def save_to_obsidian(case):
+    if not os.path.exists(OBSIDIAN_DB_PATH):
+        return
     try:
-        safe_title = re.sub(r'[\\/*?:\"<>|]', "", case['title'])[:50]
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", case['title'])[:50]
         filename = f"{datetime.now().strftime('%Y-%m-%d')}_{safe_title}.md"
         filepath = os.path.join(OBSIDIAN_DB_PATH, filename)
         
@@ -230,9 +233,12 @@ async def main():
         result = await analyze_cases(all_cases)
         if result and result[0]:
             report, cases_list = result
-            bot = Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
-            print("✉️ Telegram sent")
+            try:
+                bot = Bot(token=TELEGRAM_BOT_TOKEN)
+                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
+                print("✉️ Telegram sent")
+            except Exception as e:
+                print(f"❌ Telegram send error: {e}")
             
             if cases_list and supabase:
                 for c in cases_list:
