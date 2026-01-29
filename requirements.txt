@@ -1,6 +1,6 @@
 feedparser
 python-dotenv
 python-telegram-bot
-google-generativeai
-requests
+google-genai
+httpx
 supabase
