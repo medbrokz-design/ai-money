@@ -168,45 +168,56 @@ def save_to_obsidian(case):
         print(f"📄 Obsidian: {filename}")
     except Exception as e: print(f"❌ Obsidian Save: {e}")
 
+def build_telegram_report(cases):
+    if not cases: return ""
+    
+    report = "🔥 <b>КЕЙСЫ ЗАРАБОТКА: AI МОНЕТИЗАЦИЯ</b>\n\n"
+    report += "Рынок AI-автоматизации переходит от хайпа к реальным деньгам. Анализируем лучшие кейсы за сутки:\n\n"
+    
+    for c in cases:
+        # Рисуем шкалу сложности
+        score = c.get('difficulty_score', 5)
+        filled = "▓" * score
+        empty = "░" * (10 - score)
+        bar = f"{filled}{empty} {score}/10"
+        
+        report += f"🚀 <b>Кейс: {c['title']}</b>\n"
+        report += f"💰 Профит: <i>{c['profit']}</i>\n"
+        report += f"📊 Сложность: {bar}\n"
+        report += f"🛠 Стек: <code>{c['stack']}</code>\n"
+        report += f"📍 <a href=\"{c['url']}\">Читать источник</a>\n\n"
+    
+    report += "_______________________\n"
+    report += "#AI #MoneyCases #Business #Automation"
+    return report
+
 async def analyze_cases(cases):
-    if not cases: return None, None
+    if not cases: return None
     context = "\n".join([f"SOURCE {i}: {c['title']} | URL: {c['url']} | TEXT: {c['text'][:1000]}" for i, c in enumerate(cases[:20])])
 
     prompt = f"""
-    ANALYSIS TASK: Identify 2-3 REAL AI monetization cases from context. 
+    ANALYSIS TASK: Identify 2-3 REAL AI monetization cases from context.
     
     CONTEXT:
     {context}
 
-    JSON FORMAT:
-    {{
-      "telegram_post": "...",
-      "cases": [
-        {{
-          "title": "...",
-          "profit": "...",
-          "profit_num": 1200,
-          "category": "...",
-          "tags": ["A", "B"],
-          "difficulty_score": 1-10,
-          "scheme": "Step-by-step",
-          "stack": "Tools used",
-          "url": "REAL_URL_FROM_CONTEXT",
-          "source": "..."
-        }}
-      ]
-    }}
-
-    TELEGRAM RULES:
-    - Title: 🔥 <b>КЕЙСЫ ЗАРАБОТКА: AI МОНЕТИЗАЦИЯ</b>
-    - Short intro.
-    - Per case:
-      🚀 <b>Кейс: [Title]</b>
-      💰 Профит: <i>[Profit]</i>
-      📊 Сложность: [Difficulty 1-10, e.g. ▓▓▓░░░ 3/10]
-      🛠 Стек: <code>[Stack]</code>
-      📍 <a href="[URL]">Источник</a>
-    - Divider & tags.
+    JSON FORMAT (STRICTLY):
+    [
+      {{
+        "title": "...",
+        "profit": "...",
+        "profit_num": 1200,
+        "category": "...",
+        "tags": ["A", "B"],
+        "difficulty_score": 1-10,
+        "scheme": "Step-by-step",
+        "stack": "Tools used",
+        "url": "REAL_URL_FROM_CONTEXT",
+        "source": "..."
+      }}
+    ]
+    
+    IMPORTANT: The "url" field MUST be exactly the same as in the SOURCE. Do not hallucinate.
     """
 
     for key in GEMINI_API_KEYS:
@@ -220,8 +231,7 @@ async def analyze_cases(cases):
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
-            data = json.loads(res.text)
-            return data.get("telegram_post"), data.get("cases")
+            return json.loads(res.text)
         except Exception as e:
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                 print(f"⚠️ Key {key[:10]} quota exceeded. Waiting 2s and trying next...")
@@ -232,7 +242,7 @@ async def analyze_cases(cases):
                 continue
     
     print("🚫 All Gemini API keys exhausted or failed.")
-    return None, None
+    return None
 
 async def main():
     print(f"🚀 Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -244,9 +254,9 @@ async def main():
     print(f"📊 New candidates: {len(all_cases)}")
 
     if all_cases:
-        result = await analyze_cases(all_cases)
-        if result and result[0]:
-            report, cases_list = result
+        cases_list = await analyze_cases(all_cases)
+        if cases_list:
+            report = build_telegram_report(cases_list)
             try:
                 bot = Bot(token=TELEGRAM_BOT_TOKEN)
                 await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
@@ -254,7 +264,7 @@ async def main():
             except Exception as e:
                 print(f"❌ Telegram send error: {e}")
             
-            if cases_list and supabase:
+            if supabase:
                 for c in cases_list:
                     try:
                         supabase.table("ai_money_cases").upsert({**c, "created_at": datetime.now(timezone.utc).isoformat()}, on_conflict="url").execute()
@@ -262,8 +272,7 @@ async def main():
                     except Exception as e: print(f"❌ Save error: {e}")
         else:
             print("⚠️ analyze_cases returned None (likely API error or no cases found).")
-    else:
-        print("📭 No new cases today.")
+    else:        print("📭 No new cases today.")
 
 if __name__ == "__main__":
     asyncio.run(main())
