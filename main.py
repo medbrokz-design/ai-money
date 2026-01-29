@@ -277,8 +277,12 @@ async def main():
             if supabase:
                 for c in cases_list:
                     try:
-                        supabase.table("ai_money_cases").upsert({**c, "created_at": datetime.now(timezone.utc).isoformat()}, on_conflict="url").execute()
-                        save_to_obsidian(c)
+                        # Убираем технические поля для БД
+                        db_case = c.copy()
+                        if "source_id" in db_case: del db_case["source_id"]
+                        
+                        supabase.table("ai_money_cases").upsert({**db_case, "created_at": datetime.now(timezone.utc).isoformat()}, on_conflict="url").execute()
+                        save_to_obsidian(db_case)
                     except Exception as e: print(f"❌ Save error: {e}")
         else:
             print("⚠️ analyze_cases returned None (likely API error or no cases found).")
