@@ -14,15 +14,14 @@ from google.genai import types
 load_dotenv()
 
 # Настройки
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-OBSIDIAN_DB_PATH = r"D:\\Brain\\10_Projects\\AI_Money_Cases_Database"
+OBSIDIAN_DB_PATH = r"D:\Brain\10_Projects\AI_Money_Cases_Database"
 
 # Инициализация клиентов
-client = genai.Client(api_key=GEMINI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 async def is_duplicate(url: str) -> bool:
@@ -210,15 +209,29 @@ async def analyze_cases(cases):
     - Divider & tags.
     """
 
-    try:
-        res = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        data = json.loads(res.text)
-        return data.get("telegram_post"), data.get("cases")
-    except Exception as e: print(f"❌ AI Error: {e}")
+    for key in GEMINI_API_KEYS:
+        key = key.strip()
+        if not key: continue
+        try:
+            print(f"🤖 AI Analysis with key: {key[:10]}...")
+            client_ai = genai.Client(api_key=key)
+            res = client_ai.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            data = json.loads(res.text)
+            return data.get("telegram_post"), data.get("cases")
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                print(f"⚠️ Key {key[:10]} quota exceeded. Trying next...")
+                continue
+            else:
+                print(f"❌ AI Error with key {key[:10]}: {e}")
+                continue
+    
+    print("🚫 All Gemini API keys exhausted or failed.")
+    return None, None
 
 async def main():
     print(f"🚀 Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
