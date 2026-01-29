@@ -213,10 +213,10 @@ async def analyze_cases(cases):
         key = key.strip()
         if not key: continue
         try:
-            print(f"🤖 AI Analysis with key: {key[:10]}... (Model: gemini-1.5-flash)")
+            print(f"🤖 AI Analysis with key: {key[:10]}... (Model: gemini-flash-latest)")
             client_ai = genai.Client(api_key=key)
             res = client_ai.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
