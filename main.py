@@ -79,29 +79,34 @@ async def fetch_reddit(client_http: httpx.AsyncClient):
     search_queries = ["AI revenue", "AI MRR", "AI profit", "AI case study"]
     found = []
     headers = {'User-Agent': 'Mozilla/5.0 (AI Money Bot 2.0)'}
-    limit_date = datetime.now(timezone.utc) - timedelta(days=1)
+    limit_date = datetime.now(timezone.utc) - timedelta(days=7) # Расширяем до недели для поиска качества
 
     async def process_sub(sub):
         sub_found = []
         try:
-            # Special handling for AiMoneyMaking (listing instead of search)
-            urls = [f"https://www.reddit.com/r/{sub}/new.json?limit=10"] if sub == "AiMoneyMaking" else \
-                   [f"https://www.reddit.com/r/{sub}/search.json?q={q}&sort=new&restrict_sr=1&limit=5" for q in search_queries]
+            urls = [f"https://www.reddit.com/r/{sub}/new.json?limit=25"] if sub == "AiMoneyMaking" else \
+                   [f"https://www.reddit.com/r/{sub}/search.json?q={q}&sort=new&restrict_sr=1&limit=10" for q in search_queries]
             
             for url in urls:
                 r = await client_http.get(url, headers=headers, timeout=10)
                 if r.status_code == 200:
                     for post in r.json().get('data', {}).get('children', []):
                         p = post['data']
-                        if datetime.fromtimestamp(p['created_utc'], timezone.utc) > limit_date:
-                            link = f"https://www.reddit.com{p['permalink']}"
-                            if not await is_duplicate(link):
-                                sub_found.append({
-                                    'title': p['title'],
-                                    'text': p.get('selftext', '')[:2000],
-                                    'url': link,
-                                    'source': f"Reddit (r/{sub})"
-                                })
+                        text = p.get('selftext', '')
+                        title = p.get('title', '')
+                        combined = (title + " " + text).lower()
+                        
+                        # Жёсткий фильтр по ключевым словам профита
+                        if any(k in combined for k in ["$", "revenue", "mrr", "profit", "earned", "made", "income"]):
+                            if datetime.fromtimestamp(p['created_utc'], timezone.utc) > limit_date:
+                                link = f"https://www.reddit.com{p['permalink']}"
+                                if not await is_duplicate(link):
+                                    sub_found.append({
+                                        'title': p['title'],
+                                        'text': text[:3000],
+                                        'url': link,
+                                        'source': f"Reddit (r/{sub})"
+                                    })
         except Exception as e: print(f"❌ Reddit {sub}: {e}")
         return sub_found
 
@@ -193,31 +198,37 @@ def build_telegram_report(cases):
 
 async def analyze_cases(cases):
     if not cases: return None
-    # Даем нейронке пронумерованные источники
-    context = "\n".join([f"ID {i}: {c['title']} | URL: {c['url']} | TEXT: {c['text'][:1000]}" for i, c in enumerate(cases[:20])])
+    # Более глубокий контекст (больше символов на кейс)
+    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:2500]}" for i, c in enumerate(cases[:15])])
 
     prompt = f"""
-    ANALYSIS TASK: Identify 2-3 REAL AI monetization cases from context.
+    ROLE: Senior Business Analyst for AI Ventures.
+    TASK: Extract 2-3 REAL, QUANTIFIABLE AI monetization cases from the context below.
     
+    CRITICAL RULES:
+    1. ONLY use cases with specific numbers (e.g., $1,000 revenue, $500/week, 12k in 3 months).
+    2. IGNORE general questions, advice-seeking, or non-factual stories (e.g., "I'm thinking about getting a dog").
+    3. If a post is just an ad without a real case study, DISCARD it.
+    4. Return "source_id" matching exactly the CASE_ID from context.
+    5. Be extremely skeptical. If it sounds like a fake guru story without steps, ignore it.
+
     CONTEXT:
     {context}
 
-    JSON FORMAT (STRICTLY):
+    JSON FORMAT:
     [
       {{
         "source_id": 0,
-        "title": "Clean title",
-        "profit": "Profit description",
-        "profit_num": 1200,
-        "category": "Category",
+        "title": "Short descriptive title",
+        "profit": "E.g. $450/week",
+        "profit_num": 450,
+        "category": "SaaS/Marketing/etc",
         "tags": ["A", "B"],
         "difficulty_score": 1-10,
-        "scheme": "Step-by-step",
+        "scheme": "Detailed step-by-step logic",
         "stack": "Tools used"
       }}
     ]
-    
-    IMPORTANT: "source_id" MUST be the ID from the CONTEXT (e.g., 0, 1, 2...).
     """
 
     for key in GEMINI_API_KEYS:
