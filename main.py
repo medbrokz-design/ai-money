@@ -213,10 +213,10 @@ async def analyze_cases(cases):
         key = key.strip()
         if not key: continue
         try:
-            print(f"🤖 AI Analysis with key: {key[:10]}...")
+            print(f"🤖 AI Analysis with key: {key[:10]}... (Model: gemini-1.5-flash)")
             client_ai = genai.Client(api_key=key)
             res = client_ai.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-1.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
@@ -224,7 +224,8 @@ async def analyze_cases(cases):
             return data.get("telegram_post"), data.get("cases")
         except Exception as e:
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                print(f"⚠️ Key {key[:10]} quota exceeded. Trying next...")
+                print(f"⚠️ Key {key[:10]} quota exceeded. Waiting 2s and trying next...")
+                await asyncio.sleep(2)
                 continue
             else:
                 print(f"❌ AI Error with key {key[:10]}: {e}")
