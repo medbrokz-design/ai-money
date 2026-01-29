@@ -193,7 +193,8 @@ def build_telegram_report(cases):
 
 async def analyze_cases(cases):
     if not cases: return None
-    context = "\n".join([f"SOURCE {i}: {c['title']} | URL: {c['url']} | TEXT: {c['text'][:1000]}" for i, c in enumerate(cases[:20])])
+    # Даем нейронке пронумерованные источники
+    context = "\n".join([f"ID {i}: {c['title']} | URL: {c['url']} | TEXT: {c['text'][:1000]}" for i, c in enumerate(cases[:20])])
 
     prompt = f"""
     ANALYSIS TASK: Identify 2-3 REAL AI monetization cases from context.
@@ -204,20 +205,19 @@ async def analyze_cases(cases):
     JSON FORMAT (STRICTLY):
     [
       {{
-        "title": "...",
-        "profit": "...",
+        "source_id": 0,
+        "title": "Clean title",
+        "profit": "Profit description",
         "profit_num": 1200,
-        "category": "...",
+        "category": "Category",
         "tags": ["A", "B"],
         "difficulty_score": 1-10,
         "scheme": "Step-by-step",
-        "stack": "Tools used",
-        "url": "REAL_URL_FROM_CONTEXT",
-        "source": "..."
+        "stack": "Tools used"
       }}
     ]
     
-    IMPORTANT: The "url" field MUST be exactly the same as in the SOURCE. Do not hallucinate.
+    IMPORTANT: "source_id" MUST be the ID from the CONTEXT (e.g., 0, 1, 2...).
     """
 
     for key in GEMINI_API_KEYS:
@@ -231,7 +231,17 @@ async def analyze_cases(cases):
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
-            return json.loads(res.text)
+            raw_cases = json.loads(res.text)
+            
+            # Мапим данные обратно на оригинальные URL
+            final_cases = []
+            for rc in raw_cases:
+                idx = rc.get("source_id")
+                if idx is not None and 0 <= idx < len(cases):
+                    rc["url"] = cases[idx]["url"]
+                    rc["source"] = cases[idx]["source"]
+                    final_cases.append(rc)
+            return final_cases
         except Exception as e:
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                 print(f"⚠️ Key {key[:10]} quota exceeded. Waiting 2s and trying next...")
