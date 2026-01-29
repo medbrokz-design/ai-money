@@ -1,0 +1,222 @@
+import os
+import asyncio
+import feedparser
+import praw
+import json
+import requests
+import google.generativeai as genai
+from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+from telegram import Bot
+from supabase import create_client, Client
+
+load_dotenv()
+
+# Ключи
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
+REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "AI_Money_Cases_Bot/1.0")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# Настройка AI
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-flash-latest')
+
+# Инициализация Supabase
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def fetch_hacker_news_cases():
+    print("🔍 Ищу на Hacker News...")
+    timestamp = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp())
+    query = "AI revenue OR AI profit OR AI SaaS OR AI MRR"
+    url = f"https://hn.algolia.com/api/v1/search?query={query}&tags=story&numericFilters=created_at_i>{timestamp}"
+    found = []
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            hits = r.json().get('hits', [])
+            for hit in hits:
+                found.append({
+                    'title': hit['title'],
+                    'text': hit.get('story_text', '')[:2000],
+                    'url': hit.get('url') or f"https://news.ycombinator.com/item?id={hit['objectID']}",
+                    'source': 'Hacker News'
+                })
+    except Exception as e:
+        print(f"❌ Ошибка Hacker News: {e}")
+    return found
+
+def fetch_github_trending():
+    print("🔍 Ищу тренды на GitHub (AI)...")
+    date_str = (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y-%m-%d')
+    url = f"https://api.github.com/search/repositories?q=topic:ai+created:>{date_str}&sort=stars&order=desc"
+    found = []
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            items = r.json().get('items', [])[:5]
+            for item in items:
+                found.append({
+                    'title': f"GitHub Trend: {item['name']}",
+                    'text': item['description'] or 'No description',
+                    'url': item['html_url'],
+                    'source': 'GitHub'
+                })
+    except Exception as e:
+        print(f"❌ Ошибка GitHub: {e}")
+    return found
+
+def fetch_reddit_cases():
+    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
+        print("⚠️ Reddit ключи не настроены. Пропускаю.")
+        return []
+    
+    print("🔍 Ищу на Reddit...")
+    try:
+        reddit = praw.Reddit(client_id=REDDIT_CLIENT_ID, client_secret=REDDIT_CLIENT_SECRET, user_agent=REDDIT_USER_AGENT)
+        subreddits = ["SideProject", "SaaS", "Entrepreneur", "AIProjects", "IndieHackers", "solopreneur"]
+        search_queries = ["AI revenue", "AI MRR", "AI profit", "AI case study"]
+        found_posts = []
+        limit_date = datetime.now(timezone.utc) - timedelta(days=1)
+
+        for sub_name in subreddits:
+            subreddit = reddit.subreddit(sub_name)
+            for query in search_queries:
+                for post in subreddit.search(query, sort='new', time_filter='day', limit=5):
+                    post_date = datetime.fromtimestamp(post.created_utc, timezone.utc)
+                    if post_date > limit_date:
+                        found_posts.append({
+                            'title': post.title,
+                            'text': post.selftext[:2000],
+                            'url': f"https://www.reddit.com{post.permalink}",
+                            'source': f"Reddit (r/{sub_name})"
+                        })
+        unique_posts = {p['url']: p for p in found_posts}.values()
+        return list(unique_posts)
+    except Exception as e:
+        print(f"❌ Ошибка Reddit: {e}")
+        return []
+
+def fetch_rss_cases():
+    print("🔍 Ищу в RSS лентах...")
+    RSS_FEEDS = ["https://medium.com/feed/tag/ai-monetization", "https://www.indiehackers.com/rss"]
+    news_items = []
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    for url in RSS_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                published_parsed = getattr(entry, 'published_parsed', None)
+                if published_parsed:
+                    pub_date = datetime(*published_parsed[:6], tzinfo=timezone.utc)
+                    if pub_date > yesterday:
+                        news_items.append({
+                            'title': entry.title,
+                            'text': entry.summary if 'summary' in entry else '',
+                            'url': entry.link,
+                            'source': 'RSS'
+                        })
+        except Exception as e:
+            print(f"❌ Ошибка RSS {url}: {e}")
+    return news_items
+
+def analyze_cases(cases):
+    if not cases: return None, None
+
+    context = ""
+    for i, c in enumerate(cases[:15], 1):
+        context += f"--- SOURCE {i} ({c['source']}) ---\nTitle: {c['title']}\nContent: {c['text']}\nURL: {c['url']}\n\n"
+
+    prompt = f"""
+    Ты — жесткий бизнес-аналитик и эксперт по ИИ-монетизации. Твоя задача — выжать из входящих данных 2-3 конкретных кейса заработка.
+
+    ВЫДАЙ ОТВЕТ СТРОГО В ФОРМАТЕ JSON. 
+    ФОРМАТ JSON:
+    {{
+      "telegram_post": "Текст поста для Telegram в HTML...",
+      "cases": [
+        {{
+          "title": "Название",
+          "profit": "Описание профита (текст)",
+          "profit_num": 1500.0,
+          "category": "Ниша (SaaS, Marketing, Content, E-commerce, Trading, Consulting)",
+          "tags": ["Tag1", "Tag2"],
+          "difficulty_score": 5,
+          "scheme": "Пошаговая схема",
+          "stack": "Инструменты",
+          "url": "Ссылка",
+          "source": "Reddit/HN/GitHub"
+        }}
+      ]
+    }}
+
+    ПРАВИЛА ТЕЛЕГРАМ-ПОСТА:
+    - Используй ТОЛЬКО <b>, <i>, <a>. 
+    - Для новых строк используй только символ \n.
+    - В конце поста добавь блок: "📊 Сложность: X/10 | Категория: Y".
+    """
+
+    response = model.generate_content(prompt)
+    try:
+        text = response.text.strip()
+        if '```json' in text:
+            text = text.split('```json')[1].split('```')[0]
+        elif '```' in text:
+            text = text.split('```')[1].split('```')[0]
+        
+        result = json.loads(text.strip())
+        post = result.get("telegram_post", "")
+        post = post.replace("<br>", "\n").replace("<br/>", "\n").replace("<p>", "").replace("</p>", "\n")
+        return post, result.get("cases")
+    except Exception as e:
+        print(f"❌ Ошибка JSON: {e}")
+        return None, None
+
+def save_to_supabase(cases):
+    if not supabase or not cases: return
+    for case in cases:
+        try:
+            supabase.table("ai_money_cases").upsert({
+                "title": case['title'], "profit": case['profit'], "profit_num": case.get('profit_num', 0),
+                "category": case.get('category', 'Other'), "tags": case.get('tags', []),
+                "difficulty_score": case.get('difficulty_score', 5), "scheme": case['scheme'],
+                "stack": case['stack'], "url": case['url'], "source": case['source'],
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }, on_conflict="url").execute()
+            print(f"💾 Сохранено: {case['title']}")
+        except Exception as e:
+            print(f"❌ Supabase error: {e}")
+
+async def send_to_telegram(text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or not text: return
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    async with bot:
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode='HTML', disable_web_page_preview=True)
+
+async def main():
+    print("🚀 ГЛОБАЛЬНЫЙ ПОИСК КЕЙСОВ...")
+    hn = fetch_hacker_news_cases()
+    gh = fetch_github_trending()
+    rd = fetch_reddit_cases()
+    rs = fetch_rss_cases()
+    
+    all_cases = hn + gh + rd + rs
+    print(f"📊 Найдено материалов: {len(all_cases)}")
+    
+    if all_cases:
+        report, cases_list = analyze_cases(all_cases)
+        if report:
+            print(report)
+            await send_to_telegram(report)
+            if cases_list: save_to_supabase(cases_list)
+    else:
+        print("❌ Ничего не найдено.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
