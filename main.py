@@ -1,9 +1,9 @@
 import os
 import asyncio
 import feedparser
-import praw
 import json
 import requests
+import time
 import google.generativeai as genai
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -16,9 +16,6 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
-REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "AI_Money_Cases_Bot/1.0")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -73,35 +70,63 @@ def fetch_github_trending():
     return found
 
 def fetch_reddit_cases():
-    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
-        print("⚠️ Reddit ключи не настроены. Пропускаю.")
-        return []
+    print("🔍 Ищу на Reddit (через JSON)...")
+    subreddits = ["SideProject", "SaaS", "Entrepreneur", "AiMoneyMaking", "IndieHackers", "solopreneur"]
+    search_queries = ["AI revenue", "AI MRR", "AI profit", "AI case study"]
+    found_posts = []
     
-    print("🔍 Ищу на Reddit...")
-    try:
-        reddit = praw.Reddit(client_id=REDDIT_CLIENT_ID, client_secret=REDDIT_CLIENT_SECRET, user_agent=REDDIT_USER_AGENT)
-        subreddits = ["SideProject", "SaaS", "Entrepreneur", "AIProjects", "IndieHackers", "solopreneur"]
-        search_queries = ["AI revenue", "AI MRR", "AI profit", "AI case study"]
-        found_posts = []
-        limit_date = datetime.now(timezone.utc) - timedelta(days=1)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    limit_date = datetime.now(timezone.utc) - timedelta(days=1)
 
-        for sub_name in subreddits:
-            subreddit = reddit.subreddit(sub_name)
-            for query in search_queries:
-                for post in subreddit.search(query, sort='new', time_filter='day', limit=5):
-                    post_date = datetime.fromtimestamp(post.created_utc, timezone.utc)
-                    if post_date > limit_date:
-                        found_posts.append({
-                            'title': post.title,
-                            'text': post.selftext[:2000],
-                            'url': f"https://www.reddit.com{post.permalink}",
-                            'source': f"Reddit (r/{sub_name})"
-                        })
-        unique_posts = {p['url']: p for p in found_posts}.values()
-        return list(unique_posts)
-    except Exception as e:
-        print(f"❌ Ошибка Reddit: {e}")
-        return []
+    for sub_name in subreddits:
+        try:
+            # Сначала пробуем простой листинг сабреддита, если это специфичный саб
+            if sub_name == "AiMoneyMaking":
+                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
+                 r = requests.get(url, headers=headers, timeout=10)
+                 if r.status_code == 200:
+                    posts = r.json().get('data', {}).get('children', [])
+                    for post in posts:
+                        p_data = post['data']
+                        created_utc = datetime.fromtimestamp(p_data['created_utc'], timezone.utc)
+                        if created_utc > limit_date:
+                            # Детали поста
+                            post_url = f"https://www.reddit.com{p_data['permalink']}"
+                            # Иногда текст уже есть в листинге
+                            text = p_data.get('selftext', '')
+                            # Если текста нет, можно попробовать зайти внутрь (доп. запрос), но пока ограничимся листингом для скорости
+                            
+                            found_posts.append({
+                                'title': p_data['title'],
+                                'text': text[:2000],
+                                'url': post_url,
+                                'source': f"Reddit (r/{sub_name})"
+                            })
+            
+            # Поиск по ключевым словам для остальных
+            else:
+                for query in search_queries:
+                    url = f"https://www.reddit.com/r/{sub_name}/search.json?q={query}&sort=new&restrict_sr=1&limit=5"
+                    r = requests.get(url, headers=headers, timeout=10)
+                    if r.status_code == 200:
+                        posts = r.json().get('data', {}).get('children', [])
+                        for post in posts:
+                            p_data = post['data']
+                            created_utc = datetime.fromtimestamp(p_data['created_utc'], timezone.utc)
+                            if created_utc > limit_date:
+                                found_posts.append({
+                                    'title': p_data['title'],
+                                    'text': p_data.get('selftext', '')[:2000],
+                                    'url': f"https://www.reddit.com{p_data['permalink']}",
+                                    'source': f"Reddit (r/{sub_name})"
+                                })
+                    time.sleep(1) # Вежливость к API
+        except Exception as e:
+            print(f"❌ Ошибка Reddit r/{sub_name}: {e}")
+            
+    # Удаляем дубликаты
+    unique_posts = {p['url']: p for p in found_posts}.values()
+    return list(unique_posts)
 
 def fetch_rss_cases():
     print("🔍 Ищу в RSS лентах...")

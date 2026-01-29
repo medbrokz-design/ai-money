@@ -1,5 +1,6 @@
 feedparser
-praw
 python-dotenv
 python-telegram-bot
 google-generativeai
+requests
+supabase
