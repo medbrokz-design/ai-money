@@ -107,6 +107,8 @@ async def fetch_reddit(client_http: httpx.AsyncClient):
                                         'url': link,
                                         'source': f"Reddit (r/{sub})"
                                     })
+                else:
+                    print(f"⚠️ Reddit {sub} status {r.status_code} for {url[:50]}...")
         except Exception as e: print(f"❌ Reddit {sub}: {e}")
         return sub_found
 
@@ -176,41 +178,48 @@ def save_to_obsidian(case):
 def build_telegram_report(cases):
     if not cases: return ""
     
-    report = "🔥 <b>КЕЙСЫ ЗАРАБОТКА: AI МОНЕТИЗАЦИЯ</b>\n\n"
-    report += "Рынок AI-автоматизации переходит от хайпа к реальным деньгам. Анализируем лучшие кейсы за сутки:\n\n"
+    report = "💎 <b>AI MONEY CASES: ЕЖЕДНЕВНЫЙ РАЗБОР</b>\n"
+    report += "<i>Прагматичный взгляд на то, где сейчас лежат деньги в ИИ.</i>\n\n"
     
     for c in cases:
-        # Рисуем шкалу сложности
         score = c.get('difficulty_score', 5)
-        filled = "▓" * score
-        empty = "░" * (10 - score)
-        bar = f"{filled}{empty} {score}/10"
+        filled = "🟢" * (score // 2)
+        empty = "⚪" * (5 - (score // 2))
+        bar = f"{filled}{empty}"
         
-        report += f"🚀 <b>Кейс: {c['title']}</b>\n"
-        report += f"💰 Профит: <i>{c['profit']}</i>\n"
-        report += f"📊 Сложность: {bar}\n"
-        report += f"🛠 Стек: <code>{c['stack']}</code>\n"
-        report += f"📍 <a href=\"{c['url']}\">Читать источник</a>\n\n"
+        report += f"🚀 <b>{c['title'].upper()}</b>\n"
+        report += f"💰 <b>Профит:</b> {c['profit']}\n"
+        report += f"🛠 <b>Стек:</b> <code>{c['stack']}</code>\n"
+        report += f"⚙️ <b>Сложность:</b> {bar} ({score}/10)\n\n"
+        
+        report += f"📝 <b>КАК ЭТО РАБОТАЕТ:</b>\n{c['scheme']}\n\n"
+        
+        if 'insight' in c:
+            report += f"💡 <b>ПОЧЕМУ ЭТО 'ТЕМКА':</b>\n<i>{c['insight']}</i>\n\n"
+        
+        report += f"📍 <a href=\"{c['url']}\">Читать первоисточник</a>\n"
+        report += "────────────────────\n\n"
     
-    report += "_______________________\n"
-    report += "#AI #MoneyCases #Business #Automation"
+    report += "🎯 <b>Действуй или наблюдай.</b>\n"
+    report += "#AI #MoneyCases #SaaS #Automation"
     return report
 
 async def analyze_cases(cases):
     if not cases: return None
     # Более глубокий контекст (больше символов на кейс)
-    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:2500]}" for i, c in enumerate(cases[:15])])
+    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:2500]}" for i, c in enumerate(cases[:20])])
 
     prompt = f"""
-    ROLE: Senior Business Analyst for AI Ventures.
-    TASK: Extract 2-3 REAL, QUANTIFIABLE AI monetization cases from the context below.
+    ROLE: Senior Business Analyst & Digital Entrepreneur.
+    TASK: Extract ALL high-quality, REAL, and QUANTIFIABLE AI monetization cases from the context below (up to 10 cases).
     
     CRITICAL RULES:
-    1. ONLY use cases with specific numbers (e.g., $1,000 revenue, $500/week, 12k in 3 months).
-    2. IGNORE general questions, advice-seeking, or non-factual stories (e.g., "I'm thinking about getting a dog").
-    3. If a post is just an ad without a real case study, DISCARD it.
-    4. Return "source_id" matching exactly the CASE_ID from context.
-    5. Be extremely skeptical. If it sounds like a fake guru story without steps, ignore it.
+    1. ONLY use cases with specific numbers (revenue, profit, users).
+    2. IGNORE general questions, ads, or vague stories.
+    3. Return "source_id" matching exactly the CASE_ID from context.
+    4. Be extremely skeptical. Look for actual execution details.
+    5. Translate all descriptive fields (scheme, insight) into Russian.
+    6. If you find multiple cases, keep each description concise to fit in a single message.
 
     CONTEXT:
     {context}
@@ -225,8 +234,9 @@ async def analyze_cases(cases):
         "category": "SaaS/Marketing/etc",
         "tags": ["A", "B"],
         "difficulty_score": 1-10,
-        "scheme": "Detailed step-by-step logic",
-        "stack": "Tools used"
+        "scheme": "Brief step-by-step logic (in Russian)",
+        "stack": "Tools used",
+        "insight": "Short explanation why this is a good opportunity (in Russian)"
       }}
     ]
     """
@@ -234,33 +244,33 @@ async def analyze_cases(cases):
     for key in GEMINI_API_KEYS:
         key = key.strip()
         if not key: continue
-        try:
-            print(f"🤖 AI Analysis with key: {key[:10]}... (Model: gemini-2.0-flash-lite)")
-            client_ai = genai.Client(api_key=key)
-            res = client_ai.models.generate_content(
-                model="gemini-2.0-flash-lite",
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            raw_cases = json.loads(res.text)
-            
-            # Мапим данные обратно на оригинальные URL
-            final_cases = []
-            for rc in raw_cases:
-                idx = rc.get("source_id")
-                if idx is not None and 0 <= idx < len(cases):
-                    rc["url"] = cases[idx]["url"]
-                    rc["source"] = cases[idx]["source"]
-                    final_cases.append(rc)
-            return final_cases
-        except Exception as e:
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                print(f"⚠️ Key {key[:10]} quota exceeded. Waiting 2s and trying next...")
-                await asyncio.sleep(2)
-                continue
-            else:
-                print(f"❌ AI Error with key {key[:10]}: {e}")
-                continue
+        for model_name in ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]:
+            try:
+                print(f"🤖 AI Analysis with key: {key[:10]}... (Model: {model_name})")
+                client_ai = genai.Client(api_key=key)
+                res = client_ai.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                raw_cases = json.loads(res.text)
+                
+                # Мапим данные обратно на оригинальные URL
+                final_cases = []
+                for rc in raw_cases:
+                    idx = rc.get("source_id")
+                    if idx is not None and 0 <= idx < len(cases):
+                        rc["url"] = cases[idx]["url"]
+                        rc["source"] = cases[idx]["source"]
+                        final_cases.append(rc)
+                return final_cases
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    print(f"⚠️ {model_name} quota exceeded for key {key[:10]}. Trying next model/key...")
+                    continue
+                else:
+                    print(f"❌ AI Error with {model_name} / key {key[:10]}: {e}")
+                    continue
     
     print("🚫 All Gemini API keys exhausted or failed.")
     return None
@@ -277,7 +287,20 @@ async def main():
     if all_cases:
         cases_list = await analyze_cases(all_cases)
         if cases_list:
-            report = build_telegram_report(cases_list)
+            # Фильтруем кейсы, которые уже есть в БД (чтобы не дублировать в ТГ)
+            fresh_cases = []
+            if supabase:
+                for c in cases_list:
+                    if not await is_duplicate(c['url']):
+                        fresh_cases.append(c)
+            else:
+                fresh_cases = cases_list
+
+            if not fresh_cases:
+                print("📭 No fresh unique cases after AI analysis.")
+                return
+
+            report = build_telegram_report(fresh_cases)
             try:
                 bot = Bot(token=TELEGRAM_BOT_TOKEN)
                 await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
@@ -286,14 +309,17 @@ async def main():
                 print(f"❌ Telegram send error: {e}")
             
             if supabase:
-                for c in cases_list:
+                # Список гарантированно существующих колонок (избегаем insight до миграции)
+                safe_columns = {'title', 'profit', 'profit_num', 'category', 'scheme', 'stack', 'url', 'source', 'difficulty_score', 'tags'}
+
+                for c in fresh_cases:
                     try:
                         # Убираем технические поля для БД
-                        db_case = c.copy()
-                        if "source_id" in db_case: del db_case["source_id"]
+                        db_case = {k: v for k, v in c.items() if k in safe_columns}
                         
+                        # Сохраняем только если еще нет (на всякий случай используем upsert)
                         supabase.table("ai_money_cases").upsert({**db_case, "created_at": datetime.now(timezone.utc).isoformat()}, on_conflict="url").execute()
-                        save_to_obsidian(db_case)
+                        save_to_obsidian(c) # Сохраняем в Обсидиан оригинал (со всеми полями)
                     except Exception as e: print(f"❌ Save error: {e}")
         else:
             print("⚠️ analyze_cases returned None (likely API error or no cases found).")

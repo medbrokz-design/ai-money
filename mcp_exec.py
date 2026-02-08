@@ -56,7 +56,8 @@ alter table ai_money_cases
 add column if not exists profit_num numeric,
 add column if not exists category text,
 add column if not exists tags text[],
-add column if not exists difficulty_score int check (difficulty_score >= 1 and difficulty_score <= 10);
+add column if not exists difficulty_score int check (difficulty_score >= 1 and difficulty_score <= 10),
+add column if not exists insight text;
 """
 
 run_mcp_query(sql)
