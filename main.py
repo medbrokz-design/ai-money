@@ -122,7 +122,12 @@ async def fetch_reddit(client_http: httpx.AsyncClient):
 
 async def fetch_rss():
     print("🔍 RSS...")
-    FEEDS = ["https://medium.com/feed/tag/ai-monetization", "https://www.indiehackers.com/rss"]
+    FEEDS = [
+        "https://medium.com/feed/tag/ai-monetization",
+        "https://www.indiehackers.com/rss",
+        "https://news.google.com/rss/search?q=AI+SaaS+revenue+case+study&hl=en-US",
+        "https://www.producthunt.com/feed"
+    ]
     found = []
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     for url in FEEDS:
@@ -133,11 +138,16 @@ async def fetch_rss():
                     pub_date = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
                     if pub_date > yesterday:
                         if not await is_duplicate(entry.link):
+                            text = entry.get('summary', '')
+                            if 'content' in entry:
+                                text += " " + entry.content[0].value
+                            
+                            import urllib.parse
                             found.append({
                                 'title': entry.title,
-                                'text': entry.summary if 'summary' in entry else '',
+                                'text': text[:4000],
                                 'url': entry.link,
-                                'source': 'RSS'
+                                'source': f"RSS ({urllib.parse.urlparse(url).netloc})"
                             })
         except Exception as e: print(f"❌ RSS {url}: {e}")
     return found
@@ -207,7 +217,7 @@ def build_telegram_report(cases):
         report += f"🛠 <b>СТЕК ТЕХНОЛОГИЙ:</b>\n<code>{c['stack']}</code>\n\n"
         
         if 'insight' in c:
-            report += f"💡 <b>АНАЛИЗ ХАЙЗЕНБЕРГА:</b>\n<i>{c['insight']}</i>\n\n"
+            report += f"💡 <b>РЫЧАГ МОНЕТИЗАЦИИ:</b>\n<i>{c['insight']}</i>\n\n"
         
         report += f"📍 <a href=\"{c['url']}\"><b>ОТКРЫТЬ ПЕРВОИСТОЧНИК</b></a>\n"
         report += "────────────────────\n\n"
@@ -218,31 +228,32 @@ def build_telegram_report(cases):
 
 async def analyze_cases(cases):
     if not cases: return None
-    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:3500]}" for i, c in enumerate(cases[:15])])
+    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | SOURCE: {c['source']} | CONTENT: {c['text'][:3500]}" for i, c in enumerate(cases[:15])])
 
     prompt = f"""
-    ROLE: Senior Digital Entrepreneur & Growth Hacker (aka Dr. Heisenberg).
-    TASK: Extract REAL AI monetization cases with DEEP structural analysis.
+    ROLE: Senior Digital Entrepreneur & Growth Hacker.
+    TASK: Extract REAL AI monetization cases or HIGH-POTENTIAL tools from the context.
     
     CRITICAL RULES:
-    1. EXCLUDE: Low-effort "ideas", generic news, or posts without proof/numbers.
-    2. ANALYZE: Carefully read the CONTENT to find the EXACT steps they took.
-    3. TONE: Professional, cynical yet pragmatic, focused on money and execution.
-    4. LANGUAGE: All output text (title, scheme, insight) MUST be in RUSSIAN.
+    1. PRIORITIZE: Posts with revenue, profit, or user metrics.
+    2. SECONDARY: If no revenue is mentioned, pick tools with high viral potential or unique utility that can be easily monetized.
+    3. ANALYZE: Carefully read the CONTENT to find the EXACT steps they took.
+    4. TONE: Professional, pragmatic, focused on money and execution.
+    5. LANGUAGE: All output text (title, scheme, insight) MUST be in RUSSIAN.
     
     JSON FORMAT:
     [
       {{
         "source_id": 0,
         "title": "Хлёсткий заголовок кейса",
-        "profit": "Конкретные цифры дохода (напр. $2,400 MRR)",
-        "profit_num": 2400,
+        "profit": "Конкретные цифры дохода ИЛИ потенциал (напр. '$1000+ Potential')",
+        "profit_num": 0,
         "category": "SaaS / LeadGen / Content / Agency",
         "tags": ["AI", "Automation"],
         "difficulty_score": 1-10,
-        "scheme": "Детальный пошаговый алгоритм реализации. Минимум 3-4 шага. Как именно они это сделали?",
-        "stack": "Полный список инструментов через запятую",
-        "insight": "Теневая сторона: почему это сработало? Какой неочевидный рычаг они использовали? В стиле Хайзенберга."
+        "scheme": "Детальный пошаговый алгоритм реализации ИЛИ план запуска. Минимум 3-4 шага.",
+        "stack": "Инструменты через запятую",
+        "insight": "Рычаг монетизации: почему это сработает? Какой неочевидный рычаг? Почему это нужно делать сейчас?"
       }}
     ]
 
