@@ -4,9 +4,11 @@ import feedparser
 import json
 import httpx
 import re
+import trafilatura
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from supabase import create_client, Client
 from google import genai
 from google.genai import types
@@ -21,6 +23,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OBSIDIAN_DB_PATH = r"D:\Brain\10_Projects\AI_Money_Cases_Database"
+PROJECTS_MOC_PATH = r"D:\Brain\10_Projects\10_Projects_MOC.md"
 
 # Инициализация клиентов
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
@@ -34,6 +37,32 @@ async def is_duplicate(url: str) -> bool:
         print(f"⚠️ Supabase error: {e}")
         return False
 
+async def deep_scrape(url: str) -> str:
+    """Извлекает полный текст статьи по ссылке, если это не соцсеть."""
+    if any(x in url for x in ["reddit.com", "github.com", "t.me"]):
+        return ""
+    try:
+        print(f"🌐 Scrapping: {url}...")
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            content = trafilatura.extract(downloaded, include_comments=False, include_tables=True)
+            return content[:5000] if content else ""
+    except Exception as e:
+        print(f"⚠️ Scrape error {url}: {e}")
+    return ""
+
+def get_project_context():
+    """Собирает контекст наших текущих ресурсов для 'Brain Sync'."""
+    try:
+        if os.path.exists(PROJECTS_MOC_PATH):
+            with open(PROJECTS_MOC_PATH, "r", encoding="utf-8") as f:
+                content = f.read()
+                # Извлекаем только список активных проектов
+                projects = re.findall(r"\[\[(.*?)\]\]", content)
+                return ", ".join(projects[:15])
+    except: pass
+    return "Telegram Parser, WhatsApp Bot, Nano Banana Pro (AI Prompts), SEO Automation"
+
 async def fetch_hacker_news(client_http: httpx.AsyncClient):
     print("🔍 HN...")
     timestamp = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp())
@@ -46,9 +75,13 @@ async def fetch_hacker_news(client_http: httpx.AsyncClient):
             for hit in r.json().get('hits', []):
                 link = hit.get('url') or f"https://news.ycombinator.com/item?id={hit['objectID']}"
                 if not await is_duplicate(link):
+                    text = hit.get('story_text', '')
+                    if not text: # Если текста нет, пробуем парсить ссылку
+                        text = await deep_scrape(link)
+                    
                     found.append({
                         'title': hit['title'],
-                        'text': hit.get('story_text', '')[:2000],
+                        'text': text[:4000],
                         'url': link,
                         'source': 'Hacker News'
                     })
@@ -139,13 +172,14 @@ async def fetch_rss():
                     if pub_date > yesterday:
                         if not await is_duplicate(entry.link):
                             text = entry.get('summary', '')
-                            if 'content' in entry:
-                                text += " " + entry.content[0].value
-                            
-                            import urllib.parse
+                            # Если это внешняя статья, пробуем глубокий парсинг
+                            if len(text) < 500:
+                                deep_text = await deep_scrape(entry.link)
+                                if deep_text: text = deep_text
+
                             found.append({
                                 'title': entry.title,
-                                'text': text[:4000],
+                                'text': text[:5000],
                                 'url': entry.link,
                                 'source': f"RSS ({urllib.parse.urlparse(url).netloc})"
                             })
@@ -191,7 +225,7 @@ def save_to_obsidian(case):
     except Exception as e: print(f"❌ Obsidian Save: {e}")
 
 def build_telegram_report(cases):
-    if not cases: return ""
+    if not cases: return "", None
     
     report = "💎 <b>AI PROFIT BLUEPRINT: РАЗБОР КЕЙСА</b>\n"
     report += "────────────────────\n"
@@ -203,7 +237,6 @@ def build_telegram_report(cases):
         bar = f"{filled}{empty}"
         
         report += f"🚀 <b>{c['title'].upper()}</b>\n\n"
-        
         report += f"💰 <b>ПРОФИТ:</b> <code>{c['profit']}</code>\n"
         report += f"📊 <b>КАТЕГОРИЯ:</b> #{c.get('category', 'SaaS').replace(' ', '_')}\n"
         report += f"⚙️ <b>СЛОЖНОСТЬ:</b> {bar} ({score}/10)\n\n"
@@ -224,36 +257,49 @@ def build_telegram_report(cases):
     
     report += "🎯 <b>Действуй или наблюдай.</b>\n"
     report += "#AI #MoneyCases #SaaS #BuildInPublic"
-    return report
+
+    # Интерактивные кнопки (админ-панель)
+    keyboard = [
+        [
+            InlineKeyboardButton("📥 Сохранить всё", callback_data="save_all"),
+            InlineKeyboardButton("📊 Тренды недели", callback_data="get_trends")
+        ],
+        [
+            InlineKeyboardButton("🚀 Запустить MVP бота", url="https://t.me/TeleFocusBot")
+        ]
+    ]
+    
+    return report, InlineKeyboardMarkup(keyboard)
 
 async def analyze_cases(cases):
     if not cases: return None
-    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | SOURCE: {c['source']} | CONTENT: {c['text'][:3500]}" for i, c in enumerate(cases[:15])])
+    our_projects = get_project_context()
+    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | SOURCE: {c['source']} | CONTENT: {c['text'][:4000]}" for i, c in enumerate(cases[:12])])
 
     prompt = f"""
-    ROLE: Senior Digital Entrepreneur & Growth Hacker.
-    TASK: Extract REAL AI monetization cases or HIGH-POTENTIAL tools from the context.
+    ROLE: Senior Digital Entrepreneur & AI-Orchestrator.
+    TASK: Deep analysis of AI monetization cases.
     
     CRITICAL RULES:
-    1. PRIORITIZE: Posts with revenue, profit, or user metrics.
-    2. SECONDARY: If no revenue is mentioned, pick tools with high viral potential or unique utility that can be easily monetized.
-    3. ANALYZE: Carefully read the CONTENT to find the EXACT steps they took.
-    4. TONE: Professional, pragmatic, focused on money and execution.
-    5. LANGUAGE: All output text (title, scheme, insight) MUST be in RUSSIAN.
+    1. PRIORITIZE: Real numbers and execution details.
+    2. BRAIN SYNC: In 'insight' field, suggest how to use our existing resources to clone or improve this case.
+       OUR RESOURCES: {our_projects}
+    3. SCRAPER PRAGMATISM: Use the provided CONTENT (often from deep scraping) to find hidden tech details.
+    4. LANGUAGE: All output text MUST be in RUSSIAN.
     
     JSON FORMAT:
     [
       {{
         "source_id": 0,
-        "title": "Хлёсткий заголовок кейса",
-        "profit": "Конкретные цифры дохода ИЛИ потенциал (напр. '$1000+ Potential')",
+        "title": "Хлёсткий заголовок",
+        "profit": "Доход ИЛИ потенциал",
         "profit_num": 0,
-        "category": "SaaS / LeadGen / Content / Agency",
+        "category": "SaaS / LeadGen / Agency / etc",
         "tags": ["AI", "Automation"],
         "difficulty_score": 1-10,
-        "scheme": "Детальный пошаговый алгоритм реализации ИЛИ план запуска. Минимум 3-4 шага.",
-        "stack": "Инструменты через запятую",
-        "insight": "Рычаг монетизации: почему это сработает? Какой неочевидный рычаг? Почему это нужно делать сейчас?"
+        "scheme": "Детальный алгоритм (3-5 шагов).",
+        "stack": "Список инструментов",
+        "insight": "Рычаг монетизации + Синергия с нашими проектами."
       }}
     ]
 
@@ -261,82 +307,84 @@ async def analyze_cases(cases):
     {context}
     """
 
-    if not GEMINI_API_KEYS:
-        print("❌ No Gemini API keys found in environment.")
-        return None
+    if not GEMINI_API_KEYS: return None
 
     for key in GEMINI_API_KEYS:
         for model_name in ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]:
             try:
-                print(f"🤖 AI Analysis with key: {key[:8]}... (Model: {model_name})")
+                print(f"🤖 AI Analysis: {model_name}...")
                 client_ai = genai.Client(api_key=key)
                 res = client_ai.models.generate_content(
                     model=model_name,
                     contents=prompt,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
-                
-                # Чистка текста от возможных markdown-оберток
                 text = res.text.strip()
                 if text.startswith("```json"): text = text[7:-3].strip()
                 elif text.startswith("```"): text = text[3:-3].strip()
-                
-                raw_cases = json.loads(text)
-                
-                final_cases = []
-                for rc in raw_cases:
-                    idx = rc.get("source_id")
-                    if idx is not None and 0 <= idx < len(cases):
-                        rc["url"] = cases[idx]["url"]
-                        rc["source"] = cases[idx]["source"]
-                        final_cases.append(rc)
-                return final_cases
+                return json.loads(text)
             except Exception as e:
-                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                    print(f"⚠️ {model_name} quota exceeded. Trying next...")
-                    continue
-                else:
-                    print(f"❌ AI Error with {model_name}: {e}")
-                    continue
-    
+                print(f"⚠️ AI Skip {model_name}: {e}")
+                continue
     return None
+
+async def run_trend_radar():
+    """Анализирует последние 50 кейсов из БД для выявления трендов."""
+    if not supabase: return
+    try:
+        print("📡 Trend Radar starting...")
+        res = supabase.table("ai_money_cases").select("*").order("created_at", desc=True).limit(50).execute()
+        history = "\n".join([f"- {r['title']} ({r['category']})" for r in res.data])
+        
+        prompt = f"Analyze these AI business cases and identify 3 hottest trends for this week. Be concise and cynical. Use Russian.\n\nCASES:\n{history}"
+        
+        client_ai = genai.Client(api_key=GEMINI_API_KEYS[0])
+        res_ai = client_ai.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        
+        trend_report = "🔥 <b>HOT TREND RADAR</b>\n\n" + res_ai.text
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        async with bot:
+            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=trend_report, parse_mode='HTML')
+    except Exception as e: print(f"❌ Trend Radar error: {e}")
 
 async def main():
     print(f"🚀 Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    if not TELEGRAM_BOT_TOKEN:
-        print("❌ Error: TELEGRAM_BOT_TOKEN is not set.")
-        return
+    
+    # Trend Radar по воскресеньям (или принудительно)
+    if datetime.now().weekday() == 6: # Sunday
+        await run_trend_radar()
 
     async with httpx.AsyncClient(follow_redirects=True) as client_http:
         tasks = [fetch_hacker_news(client_http), fetch_github(client_http), fetch_reddit(client_http), fetch_rss()]
         results = await asyncio.gather(*tasks)
     
     all_cases = [item for sublist in results for item in sublist]
-    print(f"📊 New candidates for analysis: {len(all_cases)}")
+    print(f"📊 New candidates: {len(all_cases)}")
 
     if all_cases:
-        cases_list = await analyze_cases(all_cases)
-        if cases_list:
-            fresh_cases = []
-            if supabase:
-                for c in cases_list:
-                    if not await is_duplicate(c['url']):
-                        fresh_cases.append(c)
-            else:
-                fresh_cases = cases_list
+        raw_list = await analyze_cases(all_cases)
+        if raw_list:
+            final_cases = []
+            for rc in raw_list:
+                idx = rc.get("source_id")
+                if idx is not None and 0 <= idx < len(all_cases):
+                    rc["url"] = all_cases[idx]["url"]
+                    rc["source"] = all_cases[idx]["source"]
+                    final_cases.append(rc)
 
+            fresh_cases = [c for c in final_cases if not await is_duplicate(c['url'])] if final_cases else []
             if not fresh_cases:
-                print("📭 No fresh unique cases after filtering.")
+                print("📭 No fresh unique cases.")
                 return
 
-            report = build_telegram_report(fresh_cases)
+            report, markup = build_telegram_report(fresh_cases)
             try:
                 bot = Bot(token=TELEGRAM_BOT_TOKEN)
                 async with bot:
-                    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
+                    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', 
+                                         disable_web_page_preview=True, reply_markup=markup)
                 print("✉️ Telegram sent")
-            except Exception as e:
-                print(f"❌ Telegram send error: {e}")
+            except Exception as e: print(f"❌ Telegram send error: {e}")
             
             if supabase:
                 safe_columns = {'title', 'profit', 'profit_num', 'category', 'scheme', 'stack', 'url', 'source', 'difficulty_score', 'tags', 'insight'}
@@ -345,11 +393,12 @@ async def main():
                         db_case = {k: v for k, v in c.items() if k in safe_columns}
                         supabase.table("ai_money_cases").upsert({**db_case, "created_at": datetime.now(timezone.utc).isoformat()}, on_conflict="url").execute()
                         save_to_obsidian(c)
-                    except Exception as e: print(f"❌ Database/Obsidian Save error: {e}")
-        else:
-            print("⚠️ analyze_cases returned no results (API error or filtering).")
-    else:
-        print("📭 No new cases found in sources today.")
+                    except Exception as e: print(f"❌ Save error: {e}")
+        else: print("⚠️ Analysis failed.")
+    else: print("📭 No new cases.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 
 if __name__ == "__main__":

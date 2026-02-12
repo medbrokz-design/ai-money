@@ -4,3 +4,4 @@ python-telegram-bot
 google-genai
 httpx
 supabase
+trafilatura
