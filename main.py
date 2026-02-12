@@ -14,7 +14,8 @@ from google.genai import types
 load_dotenv()
 
 # Настройки
-GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
+_keys_raw = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
+GEMINI_API_KEYS = [k.strip() for k in _keys_raw.split(",") if k.strip()]
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -40,7 +41,7 @@ async def fetch_hacker_news(client_http: httpx.AsyncClient):
     url = f"https://hn.algolia.com/api/v1/search?query={query}&tags=story&numericFilters=created_at_i>{timestamp}"
     found = []
     try:
-        r = await client_http.get(url, timeout=10)
+        r = await client_http.get(url, timeout=15)
         if r.status_code == 200:
             for hit in r.json().get('hits', []):
                 link = hit.get('url') or f"https://news.ycombinator.com/item?id={hit['objectID']}"
@@ -60,7 +61,7 @@ async def fetch_github(client_http: httpx.AsyncClient):
     url = f"https://api.github.com/search/repositories?q=topic:ai+created:>{date_str}&sort=stars&order=desc"
     found = []
     try:
-        r = await client_http.get(url, timeout=10)
+        r = await client_http.get(url, timeout=15)
         if r.status_code == 200:
             for item in r.json().get('items', [])[:10]:
                 if not await is_duplicate(item['html_url']):
@@ -78,8 +79,8 @@ async def fetch_reddit(client_http: httpx.AsyncClient):
     subreddits = ["SideProject", "SaaS", "Entrepreneur", "AiMoneyMaking", "IndieHackers", "solopreneur"]
     search_queries = ["AI revenue", "AI MRR", "AI profit", "AI case study"]
     found = []
-    headers = {'User-Agent': 'Mozilla/5.0 (AI Money Bot 2.0)'}
-    limit_date = datetime.now(timezone.utc) - timedelta(days=7) # Расширяем до недели для поиска качества
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    limit_date = datetime.now(timezone.utc) - timedelta(days=7)
 
     async def process_sub(sub):
         sub_found = []
@@ -88,27 +89,30 @@ async def fetch_reddit(client_http: httpx.AsyncClient):
                    [f"https://www.reddit.com/r/{sub}/search.json?q={q}&sort=new&restrict_sr=1&limit=10" for q in search_queries]
             
             for url in urls:
-                r = await client_http.get(url, headers=headers, timeout=10)
+                r = await client_http.get(url, headers=headers, timeout=15)
                 if r.status_code == 200:
-                    for post in r.json().get('data', {}).get('children', []):
-                        p = post['data']
-                        text = p.get('selftext', '')
-                        title = p.get('title', '')
-                        combined = (title + " " + text).lower()
-                        
-                        # Жёсткий фильтр по ключевым словам профита
-                        if any(k in combined for k in ["$", "revenue", "mrr", "profit", "earned", "made", "income"]):
-                            if datetime.fromtimestamp(p['created_utc'], timezone.utc) > limit_date:
-                                link = f"https://www.reddit.com{p['permalink']}"
-                                if not await is_duplicate(link):
-                                    sub_found.append({
-                                        'title': p['title'],
-                                        'text': text[:3000],
-                                        'url': link,
-                                        'source': f"Reddit (r/{sub})"
-                                    })
+                    data = r.json()
+                    if isinstance(data, dict) and 'data' in data:
+                        for post in data.get('data', {}).get('children', []):
+                            p = post['data']
+                            text = p.get('selftext', '')
+                            title = p.get('title', '')
+                            combined = (title + " " + text).lower()
+                            
+                            if any(k in combined for k in ["$", "revenue", "mrr", "profit", "earned", "made", "income"]):
+                                if datetime.fromtimestamp(p['created_utc'], timezone.utc) > limit_date:
+                                    link = f"https://www.reddit.com{p['permalink']}"
+                                    if not await is_duplicate(link):
+                                        sub_found.append({
+                                            'title': p['title'],
+                                            'text': text[:3000],
+                                            'url': link,
+                                            'source': f"Reddit (r/{sub})"
+                                        })
+                elif r.status_code == 429:
+                    print(f"⚠️ Reddit {sub} rate limited (429)")
                 else:
-                    print(f"⚠️ Reddit {sub} status {r.status_code} for {url[:50]}...")
+                    print(f"⚠️ Reddit {sub} status {r.status_code}")
         except Exception as e: print(f"❌ Reddit {sub}: {e}")
         return sub_found
 
@@ -140,6 +144,7 @@ async def fetch_rss():
 
 def save_to_obsidian(case):
     if not os.path.exists(OBSIDIAN_DB_PATH):
+        print(f"ℹ️ Obsidian path not found, skipping save: {OBSIDIAN_DB_PATH}")
         return
     try:
         safe_title = re.sub(r'[\\/*?:"<>|]', "", case['title'])[:50]
@@ -206,7 +211,6 @@ def build_telegram_report(cases):
 
 async def analyze_cases(cases):
     if not cases: return None
-    # Более глубокий контекст (больше символов на кейс)
     context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:2500]}" for i, c in enumerate(cases[:20])])
 
     prompt = f"""
@@ -219,7 +223,7 @@ async def analyze_cases(cases):
     3. Return "source_id" matching exactly the CASE_ID from context.
     4. Be extremely skeptical. Look for actual execution details.
     5. Translate all descriptive fields (scheme, insight) into Russian.
-    6. If you find multiple cases, keep each description concise to fit in a single message.
+    6. If you find multiple cases, keep each description concise.
 
     CONTEXT:
     {context}
@@ -241,21 +245,28 @@ async def analyze_cases(cases):
     ]
     """
 
+    if not GEMINI_API_KEYS:
+        print("❌ No Gemini API keys found in environment.")
+        return None
+
     for key in GEMINI_API_KEYS:
-        key = key.strip()
-        if not key: continue
         for model_name in ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]:
             try:
-                print(f"🤖 AI Analysis with key: {key[:10]}... (Model: {model_name})")
+                print(f"🤖 AI Analysis with key: {key[:8]}... (Model: {model_name})")
                 client_ai = genai.Client(api_key=key)
                 res = client_ai.models.generate_content(
                     model=model_name,
                     contents=prompt,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
-                raw_cases = json.loads(res.text)
                 
-                # Мапим данные обратно на оригинальные URL
+                # Чистка текста от возможных markdown-оберток
+                text = res.text.strip()
+                if text.startswith("```json"): text = text[7:-3].strip()
+                elif text.startswith("```"): text = text[3:-3].strip()
+                
+                raw_cases = json.loads(text)
+                
                 final_cases = []
                 for rc in raw_cases:
                     idx = rc.get("source_id")
@@ -266,28 +277,30 @@ async def analyze_cases(cases):
                 return final_cases
             except Exception as e:
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                    print(f"⚠️ {model_name} quota exceeded for key {key[:10]}. Trying next model/key...")
+                    print(f"⚠️ {model_name} quota exceeded. Trying next...")
                     continue
                 else:
-                    print(f"❌ AI Error with {model_name} / key {key[:10]}: {e}")
+                    print(f"❌ AI Error with {model_name}: {e}")
                     continue
     
-    print("🚫 All Gemini API keys exhausted or failed.")
     return None
 
 async def main():
     print(f"🚀 Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ Error: TELEGRAM_BOT_TOKEN is not set.")
+        return
+
     async with httpx.AsyncClient(follow_redirects=True) as client_http:
         tasks = [fetch_hacker_news(client_http), fetch_github(client_http), fetch_reddit(client_http), fetch_rss()]
         results = await asyncio.gather(*tasks)
     
     all_cases = [item for sublist in results for item in sublist]
-    print(f"📊 New candidates: {len(all_cases)}")
+    print(f"📊 New candidates for analysis: {len(all_cases)}")
 
     if all_cases:
         cases_list = await analyze_cases(all_cases)
         if cases_list:
-            # Фильтруем кейсы, которые уже есть в БД (чтобы не дублировать в ТГ)
             fresh_cases = []
             if supabase:
                 for c in cases_list:
@@ -297,33 +310,31 @@ async def main():
                 fresh_cases = cases_list
 
             if not fresh_cases:
-                print("📭 No fresh unique cases after AI analysis.")
+                print("📭 No fresh unique cases after filtering.")
                 return
 
             report = build_telegram_report(fresh_cases)
             try:
                 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
+                async with bot:
+                    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode='HTML', disable_web_page_preview=True)
                 print("✉️ Telegram sent")
             except Exception as e:
                 print(f"❌ Telegram send error: {e}")
             
             if supabase:
-                # Список гарантированно существующих колонок (избегаем insight до миграции)
-                safe_columns = {'title', 'profit', 'profit_num', 'category', 'scheme', 'stack', 'url', 'source', 'difficulty_score', 'tags'}
-
+                safe_columns = {'title', 'profit', 'profit_num', 'category', 'scheme', 'stack', 'url', 'source', 'difficulty_score', 'tags', 'insight'}
                 for c in fresh_cases:
                     try:
-                        # Убираем технические поля для БД
                         db_case = {k: v for k, v in c.items() if k in safe_columns}
-                        
-                        # Сохраняем только если еще нет (на всякий случай используем upsert)
                         supabase.table("ai_money_cases").upsert({**db_case, "created_at": datetime.now(timezone.utc).isoformat()}, on_conflict="url").execute()
-                        save_to_obsidian(c) # Сохраняем в Обсидиан оригинал (со всеми полями)
-                    except Exception as e: print(f"❌ Save error: {e}")
+                        save_to_obsidian(c)
+                    except Exception as e: print(f"❌ Database/Obsidian Save error: {e}")
         else:
-            print("⚠️ analyze_cases returned None (likely API error or no cases found).")
-    else:        print("📭 No new cases today.")
+            print("⚠️ analyze_cases returned no results (API error or filtering).")
+    else:
+        print("📭 No new cases found in sources today.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
