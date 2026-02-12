@@ -183,66 +183,71 @@ def save_to_obsidian(case):
 def build_telegram_report(cases):
     if not cases: return ""
     
-    report = "💎 <b>AI MONEY CASES: ЕЖЕДНЕВНЫЙ РАЗБОР</b>\n"
-    report += "<i>Прагматичный взгляд на то, где сейчас лежат деньги в ИИ.</i>\n\n"
+    report = "💎 <b>AI PROFIT BLUEPRINT: РАЗБОР КЕЙСА</b>\n"
+    report += "────────────────────\n"
     
     for c in cases:
         score = c.get('difficulty_score', 5)
-        filled = "🟢" * (score // 2)
-        empty = "⚪" * (5 - (score // 2))
+        filled = "●" * (score // 2)
+        empty = "○" * (5 - (score // 2))
         bar = f"{filled}{empty}"
         
-        report += f"🚀 <b>{c['title'].upper()}</b>\n"
-        report += f"💰 <b>Профит:</b> {c['profit']}\n"
-        report += f"🛠 <b>Стек:</b> <code>{c['stack']}</code>\n"
-        report += f"⚙️ <b>Сложность:</b> {bar} ({score}/10)\n\n"
+        report += f"🚀 <b>{c['title'].upper()}</b>\n\n"
         
-        report += f"📝 <b>КАК ЭТО РАБОТАЕТ:</b>\n{c['scheme']}\n\n"
+        report += f"💰 <b>ПРОФИТ:</b> <code>{c['profit']}</code>\n"
+        report += f"📊 <b>КАТЕГОРИЯ:</b> #{c.get('category', 'SaaS').replace(' ', '_')}\n"
+        report += f"⚙️ <b>СЛОЖНОСТЬ:</b> {bar} ({score}/10)\n\n"
+        
+        report += "📝 <b>МЕХАНИКА (STEP-BY-STEP):</b>\n"
+        scheme = c['scheme']
+        if not scheme.startswith('•'):
+            scheme = "\n".join([f"  • {line.strip()}" for line in scheme.split('\n') if line.strip()])
+        report += f"<i>{scheme}</i>\n\n"
+        
+        report += f"🛠 <b>СТЕК ТЕХНОЛОГИЙ:</b>\n<code>{c['stack']}</code>\n\n"
         
         if 'insight' in c:
-            report += f"💡 <b>ПОЧЕМУ ЭТО 'ТЕМКА':</b>\n<i>{c['insight']}</i>\n\n"
+            report += f"💡 <b>АНАЛИЗ ХАЙЗЕНБЕРГА:</b>\n<i>{c['insight']}</i>\n\n"
         
-        report += f"📍 <a href=\"{c['url']}\">Читать первоисточник</a>\n"
+        report += f"📍 <a href=\"{c['url']}\"><b>ОТКРЫТЬ ПЕРВОИСТОЧНИК</b></a>\n"
         report += "────────────────────\n\n"
     
     report += "🎯 <b>Действуй или наблюдай.</b>\n"
-    report += "#AI #MoneyCases #SaaS #Automation"
+    report += "#AI #MoneyCases #SaaS #BuildInPublic"
     return report
 
 async def analyze_cases(cases):
     if not cases: return None
-    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:2500]}" for i, c in enumerate(cases[:20])])
+    context = "\n".join([f"CASE_ID {i}: TITLE: {c['title']} | URL: {c['url']} | CONTENT: {c['text'][:3500]}" for i, c in enumerate(cases[:15])])
 
     prompt = f"""
-    ROLE: Senior Business Analyst & Digital Entrepreneur.
-    TASK: Extract ALL high-quality, REAL, and QUANTIFIABLE AI monetization cases from the context below (up to 10 cases).
+    ROLE: Senior Digital Entrepreneur & Growth Hacker (aka Dr. Heisenberg).
+    TASK: Extract REAL AI monetization cases with DEEP structural analysis.
     
     CRITICAL RULES:
-    1. ONLY use cases with specific numbers (revenue, profit, users).
-    2. IGNORE general questions, ads, or vague stories.
-    3. Return "source_id" matching exactly the CASE_ID from context.
-    4. Be extremely skeptical. Look for actual execution details.
-    5. Translate all descriptive fields (scheme, insight) into Russian.
-    6. If you find multiple cases, keep each description concise.
-
-    CONTEXT:
-    {context}
-
+    1. EXCLUDE: Low-effort "ideas", generic news, or posts without proof/numbers.
+    2. ANALYZE: Carefully read the CONTENT to find the EXACT steps they took.
+    3. TONE: Professional, cynical yet pragmatic, focused on money and execution.
+    4. LANGUAGE: All output text (title, scheme, insight) MUST be in RUSSIAN.
+    
     JSON FORMAT:
     [
       {{
         "source_id": 0,
-        "title": "Short descriptive title",
-        "profit": "E.g. $450/week",
-        "profit_num": 450,
-        "category": "SaaS/Marketing/etc",
-        "tags": ["A", "B"],
+        "title": "Хлёсткий заголовок кейса",
+        "profit": "Конкретные цифры дохода (напр. $2,400 MRR)",
+        "profit_num": 2400,
+        "category": "SaaS / LeadGen / Content / Agency",
+        "tags": ["AI", "Automation"],
         "difficulty_score": 1-10,
-        "scheme": "Brief step-by-step logic (in Russian)",
-        "stack": "Tools used",
-        "insight": "Short explanation why this is a good opportunity (in Russian)"
+        "scheme": "Детальный пошаговый алгоритм реализации. Минимум 3-4 шага. Как именно они это сделали?",
+        "stack": "Полный список инструментов через запятую",
+        "insight": "Теневая сторона: почему это сработало? Какой неочевидный рычаг они использовали? В стиле Хайзенберга."
       }}
     ]
+
+    CONTEXT:
+    {context}
     """
 
     if not GEMINI_API_KEYS:
